@@ -208,17 +208,42 @@ static const char* get_path_from_uri(char *dest, const char *base_path, const ch
     return dest + base_pathlen;
 }
 
+static esp_err_t get_storage_file_name(char* dest, size_t dest_size, char *base_path, char *encoded_name)
+{
+    (void)strncpy(dest, base_path, dest_size);
+
+    int src_len = strlen(base_path);
+    if (src_len < dest_size) {
+        dest += src_len;
+        dest_size -= src_len;
+    } else {
+        return ESP_ERR_NO_MEM;
+    }
+
+    int encoded_len = strlen(encoded_name);
+    // be conservative in case no special character is in the source
+    if (dest_size <= encoded_len) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    // example_uri_decode return no info about how long is the decoded string.
+    // bzero the destination buffer first.
+    bzero(dest, dest_size);
+    example_uri_decode(dest, encoded_name, encoded_len);
+
+    return ESP_OK;
+}
+
 /* Handler to download a file kept on the server */
 static esp_err_t download_get_handler(httpd_req_t *req)
 {
-    char filepath[FILE_PATH_MAX];
+    char filename[FILE_PATH_MAX+1];
     FILE *fd = NULL;
     struct stat file_stat;
 
-    const char *filename = get_path_from_uri(filepath, ((struct file_server_data *)req->user_ctx)->base_path,
-                                             req->uri, sizeof(filepath));
-    if (!filename) {
-        ESP_LOGE(TAG, "Filename is too long");
+    esp_err_t ret = get_storage_file_name(filename, sizeof(filename), ((struct file_server_data *)req->user_ctx)->base_path, req->uri);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "filename is too long, len=%u", strlen(req->uri));
         /* Respond with 500 Internal Server Error */
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
         return ESP_FAIL;
@@ -226,10 +251,10 @@ static esp_err_t download_get_handler(httpd_req_t *req)
 
     /* If name has trailing '/', respond with directory contents */
     if (filename[strlen(filename) - 1] == '/') {
-        return http_resp_dir_html(req, filepath);
+        return http_resp_dir_html(req, filename);
     }
 
-    if (stat(filepath, &file_stat) == -1) {
+    if (stat(filename, &file_stat) == -1) {
         /* If file not present on SPIFFS check if URI
          * corresponds to one of the hardcoded paths */
         if (strcmp(filename, "/index.html") == 0) {
@@ -237,15 +262,15 @@ static esp_err_t download_get_handler(httpd_req_t *req)
         } else if (strcmp(filename, "/favicon.ico") == 0) {
             return favicon_get_handler(req);
         }
-        ESP_LOGE(TAG, "Failed to stat file : %s", filepath);
+        ESP_LOGE(TAG, "Failed to stat file : %s", filename);
         /* Respond with 404 Not Found */
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File does not exist");
         return ESP_FAIL;
     }
 
-    fd = fopen(filepath, "r");
+    fd = fopen(filename, "r");
     if (!fd) {
-        ESP_LOGE(TAG, "Failed to read existing file : %s", filepath);
+        ESP_LOGE(TAG, "Failed to read existing file : %s", filename);
         /* Respond with 500 Internal Server Error */
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read existing file");
         return ESP_FAIL;
@@ -289,32 +314,6 @@ static esp_err_t download_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t get_upload_file_name(char* dest, size_t dest_size, char *base_path, char *encoded_name)
-{
-    (void)strncpy(dest, base_path, dest_size);
-
-    int src_len = strlen(base_path);
-    if (src_len < dest_size) {
-        dest += src_len;
-        dest_size -= src_len;
-    } else {
-        return ESP_ERR_NO_MEM;
-    }
-
-    int encoded_len = strlen(encoded_name);
-    // be conservative in case no special character is in the source
-    if (dest_size <= encoded_len) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    // example_uri_decode return no info about how long is the decoded string.
-    // bzero the destination buffer first.
-    bzero(dest, dest_size);
-    example_uri_decode(dest, encoded_name, encoded_len);
-
-    return ESP_OK;
-}
-
 /* Handler to upload a file onto the server */
 static esp_err_t upload_post_handler(httpd_req_t *req)
 {
@@ -326,9 +325,8 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     /* Note sizeof() counts NULL termination hence the -1 */
     char* encoded_path = req->uri + strlen("/upload");
     char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
-    ESP_LOGE(TAG, "base_path: %s, encoded_path: %s, dest_size: %u", base_path, encoded_path, sizeof(file_name));
 
-    esp_err_t ret = get_upload_file_name(file_name, sizeof(file_name), base_path, encoded_path);
+    esp_err_t ret = get_storage_file_name(file_name, sizeof(file_name), base_path, encoded_path);
     if (ret != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "can't parse filename");
         return ESP_FAIL;
@@ -422,16 +420,15 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
 /* Handler to delete a file from the server */
 static esp_err_t delete_post_handler(httpd_req_t *req)
 {
-    char filepath[FILE_PATH_MAX];
+    char filename[FILE_PATH_MAX+1];
     struct stat file_stat;
 
-    /* Skip leading "/delete" from URI to get filename */
-    /* Note sizeof() counts NULL termination hence the -1 */
-    const char *filename = get_path_from_uri(filepath, ((struct file_server_data *)req->user_ctx)->base_path,
-                                             req->uri  + sizeof("/delete") - 1, sizeof(filepath));
-    if (!filename) {
-        /* Respond with 500 Internal Server Error */
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
+    char* encoded_path = req->uri + strlen("/delete");
+    char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
+
+    esp_err_t ret = get_storage_file_name(filename, sizeof(filename), base_path, encoded_path);
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "can't parse filename");
         return ESP_FAIL;
     }
 
@@ -442,7 +439,7 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    if (stat(filepath, &file_stat) == -1) {
+    if (stat(filename, &file_stat) == -1) {
         ESP_LOGE(TAG, "File does not exist : %s", filename);
         /* Respond with 400 Bad Request */
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File does not exist");
@@ -451,7 +448,7 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "Deleting file : %s", filename);
     /* Delete file */
-    unlink(filepath);
+    unlink(filename);
 
     /* Redirect onto root to see the updated file list */
     httpd_resp_set_status(req, "303 See Other");
