@@ -25,14 +25,14 @@
 #include "esp_vfs.h"
 #include "esp_spiffs.h"
 #include "esp_http_server.h"
+#include "protocol_examples_utils.h"
 
 /* Max length a file path can have on storage */
+#ifdef CONFIG_FATFS_MAX_LFN
+#define FILE_PATH_MAX CONFIG_FATFS_MAX_LFN
+#else
 #define FILE_PATH_MAX (ESP_VFS_PATH_MAX + CONFIG_SPIFFS_OBJ_NAME_LEN)
-
-/* Max size of an individual file. Make sure this
- * value is same as that set in upload_script.html */
-#define MAX_FILE_SIZE   (200*1024) // 200 KB
-#define MAX_FILE_SIZE_STR "200KB"
+#endif
 
 /* Scratch buffer size */
 #define SCRATCH_BUFSIZE  8192
@@ -97,7 +97,7 @@ static esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
     }
 
     /* Send HTML file header */
-    httpd_resp_sendstr_chunk(req, "<!DOCTYPE html><html><body>");
+    httpd_resp_sendstr_chunk(req, "<!DOCTYPE html><html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"></head><body>");
 
     /* Get handle to embedded file upload script */
     extern const unsigned char upload_script_start[] asm("_binary_upload_script_html_start");
@@ -289,58 +289,74 @@ static esp_err_t download_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t get_upload_file_name(char* dest, size_t dest_size, char *base_path, char *encoded_name)
+{
+    (void)strncpy(dest, base_path, dest_size);
+
+    int src_len = strlen(base_path);
+    if (src_len < dest_size) {
+        dest += src_len;
+        dest_size -= src_len;
+    } else {
+        return ESP_ERR_NO_MEM;
+    }
+
+    int encoded_len = strlen(encoded_name);
+    // be conservative in case no special character is in the source
+    if (dest_size <= encoded_len) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    // example_uri_decode return no info about how long is the decoded string.
+    // bzero the destination buffer first.
+    bzero(dest, dest_size);
+    example_uri_decode(dest, encoded_name, encoded_len);
+
+    return ESP_OK;
+}
+
 /* Handler to upload a file onto the server */
 static esp_err_t upload_post_handler(httpd_req_t *req)
 {
-    char filepath[FILE_PATH_MAX];
+    char file_name[FILE_PATH_MAX+1];
     FILE *fd = NULL;
     struct stat file_stat;
 
     /* Skip leading "/upload" from URI to get filename */
     /* Note sizeof() counts NULL termination hence the -1 */
-    const char *filename = get_path_from_uri(filepath, ((struct file_server_data *)req->user_ctx)->base_path,
-                                             req->uri + sizeof("/upload") - 1, sizeof(filepath));
-    if (!filename) {
-        /* Respond with 500 Internal Server Error */
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
+    char* encoded_path = req->uri + strlen("/upload");
+    char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
+    ESP_LOGE(TAG, "base_path: %s, encoded_path: %s, dest_size: %u", base_path, encoded_path, sizeof(file_name));
+
+    esp_err_t ret = get_upload_file_name(file_name, sizeof(file_name), base_path, encoded_path);
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "can't parse filename");
         return ESP_FAIL;
     }
 
     /* Filename cannot have a trailing '/' */
-    if (filename[strlen(filename) - 1] == '/') {
-        ESP_LOGE(TAG, "Invalid filename : %s", filename);
+    if (file_name[strlen(file_name) - 1] == '/') {
+        ESP_LOGE(TAG, "Invalid filename : %s", file_name);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Invalid filename");
         return ESP_FAIL;
     }
 
-    if (stat(filepath, &file_stat) == 0) {
-        ESP_LOGE(TAG, "File already exists : %s", filepath);
+    if (stat(file_name, &file_stat) == 0) {
+        ESP_LOGE(TAG, "File already exists : %s", file_name);
         /* Respond with 400 Bad Request */
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File already exists");
         return ESP_FAIL;
     }
 
-    /* File cannot be larger than a limit */
-    if (req->content_len > MAX_FILE_SIZE) {
-        ESP_LOGE(TAG, "File too large : %d bytes", req->content_len);
-        /* Respond with 400 Bad Request */
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "File size must be less than "
-                            MAX_FILE_SIZE_STR "!");
-        /* Return failure to close underlying connection else the
-         * incoming file content will keep the socket busy */
-        return ESP_FAIL;
-    }
-
-    fd = fopen(filepath, "w");
+    fd = fopen(file_name, "w");
     if (!fd) {
-        ESP_LOGE(TAG, "Failed to create file : %s", filepath);
+        ESP_LOGE(TAG, "Failed to create file : %s", file_name);
         /* Respond with 500 Internal Server Error */
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create file");
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Receiving file : %s...", filename);
+    ESP_LOGI(TAG, "Receiving file : %s...", file_name);
 
     /* Retrieve the pointer to scratch buffer for temporary storage */
     char *buf = ((struct file_server_data *)req->user_ctx)->scratch;
@@ -363,7 +379,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
             /* In case of unrecoverable error,
              * close and delete the unfinished file*/
             fclose(fd);
-            unlink(filepath);
+            unlink(file_name);
 
             ESP_LOGE(TAG, "File reception failed!");
             /* Respond with 500 Internal Server Error */
@@ -376,7 +392,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
             /* Couldn't write everything to file!
              * Storage may be full? */
             fclose(fd);
-            unlink(filepath);
+            unlink(file_name);
 
             ESP_LOGE(TAG, "File write failed!");
             /* Respond with 500 Internal Server Error */
