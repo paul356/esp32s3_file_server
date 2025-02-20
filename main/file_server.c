@@ -179,36 +179,7 @@ static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filena
     return httpd_resp_set_type(req, "text/plain");
 }
 
-/* Copies the full path into destination buffer and returns
- * pointer to path (skipping the preceding base path) */
-static const char* get_path_from_uri(char *dest, const char *base_path, const char *uri, size_t destsize)
-{
-    const size_t base_pathlen = strlen(base_path);
-    size_t pathlen = strlen(uri);
-
-    const char *quest = strchr(uri, '?');
-    if (quest) {
-        pathlen = MIN(pathlen, quest - uri);
-    }
-    const char *hash = strchr(uri, '#');
-    if (hash) {
-        pathlen = MIN(pathlen, hash - uri);
-    }
-
-    if (base_pathlen + pathlen + 1 > destsize) {
-        /* Full path string won't fit into destination buffer */
-        return NULL;
-    }
-
-    /* Construct full path (base + path) */
-    strcpy(dest, base_path);
-    strlcpy(dest + base_pathlen, uri, pathlen + 1);
-
-    /* Return pointer to path, skipping the base */
-    return dest + base_pathlen;
-}
-
-static esp_err_t get_storage_file_name(char* dest, size_t dest_size, char *base_path, char *encoded_name)
+static esp_err_t get_storage_file_name(char* dest, size_t dest_size, const char *base_path, const char *encoded_name)
 {
     (void)strncpy(dest, base_path, dest_size);
 
