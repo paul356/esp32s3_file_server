@@ -21,6 +21,15 @@ menu "HTTP file_serving example menu"
             If this config item is set, SDMMC is used to mount the SDcard.
             Otherwise, will use SPI host to access and mount the SDcard.
 
+    menu "Default ssid/password for WiFi AP"
+         config EXAMPLE_DEFAULT_WIFI_AP_SSID
+             string "SSID for WiFi AP"
+             default "esp32s3-storage"
+         config EXAMPLE_DEFAULT_WIFI_AP_PASSWD
+             string "Password for WiFi AP"
+             default "nevertells"
+    endmenu
+
     menu "SD card pin configuration (SPI)"
         depends on EXAMPLE_MOUNT_SD_CARD && !EXAMPLE_USE_SDMMC_HOST
 

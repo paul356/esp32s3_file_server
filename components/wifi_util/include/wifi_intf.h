@@ -26,6 +26,7 @@ esp_err_t wifi_update(wifi_mode_t mode, const char* ssid, const char* passwd);
 esp_err_t wifi_init(wifi_mode_t mode, const char* ssid, const char* passwd);
 esp_err_t wifi_stop(void);
 
+wifi_mode_t get_active_mode(void);
 esp_err_t get_ip_addr(char* buf, int buf_size);
 
 #endif

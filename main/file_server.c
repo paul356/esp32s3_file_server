@@ -25,7 +25,10 @@
 #include "esp_vfs.h"
 #include "esp_spiffs.h"
 #include "esp_http_server.h"
+#include "cJSON.h"
 #include "protocol_examples_utils.h"
+#include "config_db.h"
+#include "wifi_intf.h"
 
 /* Max length a file path can have on storage */
 #ifdef CONFIG_FATFS_MAX_LFN
@@ -294,8 +297,8 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
 
     /* Skip leading "/upload" from URI to get filename */
     /* Note sizeof() counts NULL termination hence the -1 */
-    char* encoded_path = req->uri + strlen("/upload");
-    char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
+    const char* encoded_path = req->uri + strlen("/upload");
+    const char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
 
     esp_err_t ret = get_storage_file_name(file_name, sizeof(file_name), base_path, encoded_path);
     if (ret != ESP_OK) {
@@ -394,8 +397,8 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
     char filename[FILE_PATH_MAX+1];
     struct stat file_stat;
 
-    char* encoded_path = req->uri + strlen("/delete");
-    char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
+    const char* encoded_path = req->uri + strlen("/delete");
+    const char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
 
     esp_err_t ret = get_storage_file_name(filename, sizeof(filename), base_path, encoded_path);
     if (ret != ESP_OK) {
@@ -429,6 +432,182 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
 #endif
     httpd_resp_sendstr(req, "File deleted successfully");
     return ESP_OK;
+}
+
+const char *wifi_mode_to_str(wifi_mode_t mode)
+{
+    switch (mode) {
+    case WIFI_MODE_NULL:
+        return "NULL";
+    case WIFI_MODE_STA:
+        return "STA";
+    case WIFI_MODE_AP:
+        return "AP";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+wifi_mode_t str_to_wifi_mode(const char* str)
+{
+    if (strcmp(str, "NULL") == 0) {
+        return WIFI_MODE_NULL;
+    } else if (strcmp(str, "STA") == 0) {
+        return WIFI_MODE_STA;
+    } else if (strcmp(str, "AP") == 0) {
+        return WIFI_MODE_AP;
+    } else {
+        return WIFI_MODE_NULL;
+    }
+}
+
+static esp_err_t send_wifi_config_json(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr_chunk(req, "{\n");
+
+    wifi_mode_t mode = query_wifi_mode();
+    httpd_resp_sendstr_chunk(req, "\"mode\": \"");
+    httpd_resp_sendstr_chunk(req, wifi_mode_to_str(mode));
+    httpd_resp_sendstr_chunk(req, "\",\n");
+
+    char ssid[WIFI_SSID_MAX_LEN];
+    esp_err_t ret = query_wifi_ssid(ssid, WIFI_SSID_MAX_LEN);
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read WiFi SSID from config");
+        return ESP_FAIL;
+    }
+    
+    httpd_resp_sendstr_chunk(req, "\"ssid\": \"");
+    httpd_resp_sendstr_chunk(req, ssid);
+    httpd_resp_sendstr_chunk(req, "\",\n");
+
+    // can't return real passwd
+    httpd_resp_sendstr_chunk(req, "\"passwd\": \"*\"\n");
+
+    httpd_resp_sendstr_chunk(req, "}");
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
+static esp_err_t device_config_get_handler(httpd_req_t *req)
+{
+    const char* prefix = "/device/";
+    const char* last_token = req->uri + strlen(prefix);
+
+    if (strcmp(last_token, "wifi") == 0) {
+        return send_wifi_config_json(req);
+    } else {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Device config not found");
+        return ESP_FAIL;
+    }
+}
+
+static esp_err_t parse_http_req(httpd_req_t* req, cJSON** root)
+{
+    size_t buf_len = req->content_len;
+    char* body = (char*)malloc(buf_len);
+    if (!body) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    int ret = httpd_req_recv(req, body, buf_len);
+    if (ret <= 0) {
+        free(body);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *root = cJSON_ParseWithLength(body, buf_len);
+    free(body);
+    if (!root) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t update_wifi_config(wifi_mode_t mode, const char* ssid, const char* passwd)
+{
+    esp_err_t ret = wifi_update(mode, ssid, passwd);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = save_wifi_mode(mode);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = save_wifi_ssid(ssid);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = save_wifi_passwd(passwd);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t process_wifi_config_json(httpd_req_t *req)
+{
+    cJSON* root = NULL;
+    esp_err_t ret = parse_http_req(req, &root);
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to parse JSON");
+        return ESP_FAIL;
+    }
+    
+    cJSON *mode = cJSON_GetObjectItem(root, "mode");
+    char* mode_str = cJSON_GetStringValue(mode);
+    if (!mode || !mode_str) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing mode");
+        ret = ESP_ERR_INVALID_ARG;
+        goto err_out;
+    }
+
+    cJSON *ssid = cJSON_GetObjectItem(root, "ssid");
+    char* ssid_str = cJSON_GetStringValue(ssid);
+    if (!ssid) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing ssid");
+        ret = ESP_ERR_INVALID_ARG;
+        goto err_out;
+    }
+
+    cJSON *passwd = cJSON_GetObjectItem(root, "passwd");
+    char* passwd_str = cJSON_GetStringValue(passwd);
+    if (!passwd) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing passwd");
+        ret = ESP_ERR_INVALID_ARG;
+        goto err_out;
+    }
+
+    wifi_mode_t mode_val = str_to_wifi_mode(mode_str);
+    ret = update_wifi_config(mode_val, ssid_str, passwd_str);
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to update WiFi config");
+    }
+
+err_out:
+    if (root) {
+        cJSON_Delete(root);
+    }
+    return ret;
+}
+
+static esp_err_t device_config_put_handler(httpd_req_t *req)
+{
+    const char* prefix = "/device/";
+    const char* last_token = req->uri + strlen(prefix);
+
+    if (strcmp(last_token, "wifi") == 0) {
+        return process_wifi_config_json(req);
+    } else {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Device config not found");
+        return ESP_FAIL;
+    }
 }
 
 /* Function to start the file server */
@@ -491,5 +670,21 @@ esp_err_t example_start_file_server(const char *base_path)
     };
     httpd_register_uri_handler(server, &file_delete);
 
+    httpd_uri_t device_config_update = {
+        .uri       = "/device/*",
+        .method    = HTTP_PUT,
+        .handler   = device_config_put_handler,
+        .user_ctx  = server_data
+    };
+    httpd_register_uri_handler(server, &device_config_update);
+
+    httpd_uri_t device_config_query = {
+        .uri       = "/device/*",
+        .method    = HTTP_GET,
+        .handler   = device_config_get_handler,
+        .user_ctx  = server_data
+    };
+    httpd_register_uri_handler(server, &device_config_query);
+    
     return ESP_OK;
 }

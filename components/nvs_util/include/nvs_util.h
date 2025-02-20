@@ -20,6 +20,7 @@
 
 #pragma once
 #include "esp_err.h"
+#include "nvs.h"
 
 esp_err_t nvs_read_blob(const char* namespace, const char* key, void* buffer, size_t* buf_size);
 

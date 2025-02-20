@@ -173,7 +173,7 @@ esp_err_t wifi_stop(void)
     }
 
     if (wifi_state_bits != 0) {
-        // stop softap first
+        // stop softap or station first
         esp_err_t ret = esp_wifi_stop();
         if (ret != ESP_OK) {
             return ret;

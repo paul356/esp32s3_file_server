@@ -19,30 +19,59 @@
 #include "nvs_flash.h"
 #include "protocol_examples_common.h"
 #include "file_serving_example_common.h"
+#include "config_db.h"
+#include "wifi_intf.h"
 
 /* This example demonstrates how to create file server
  * using esp_http_server. This file has only startup code.
  * Look in file_server.c for the implementation.
  */
 
-static const char *TAG = "example";
+static const char *TAG = "main";
+
+void setup_wifi(void)
+{
+    char ssid[WIFI_SSID_MAX_LEN];
+    char passwd[WIFI_PASSWD_MAX_LEN];
+    
+    wifi_mode_t mode = query_wifi_mode();
+    switch (mode) {
+    case WIFI_MODE_STA:
+    case WIFI_MODE_AP:
+        break;
+    default:
+        ESP_LOGE(TAG, "WiFi mode is configured properly");
+        break;
+    }
+
+    if (query_wifi_ssid(ssid, WIFI_SSID_MAX_LEN) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read WiFi SSID from config");
+        return;
+    }
+
+    if (query_wifi_passwd(passwd, WIFI_PASSWD_MAX_LEN) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read WiFi password from config");
+        return;
+    }
+
+    esp_err_t ret = wifi_init(mode, ssid, passwd);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize WiFi, mode=%d, ssid=%s", mode, ssid);
+        return;
+    }
+}
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "Starting example");
     ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    // esp_netif_init and esp_event_loop_create_default are called by wifi_init
+    setup_wifi();
+    
     /* Initialize file storage */
     const char* base_path = "/data";
     ESP_ERROR_CHECK(example_mount_storage(base_path));
-
-    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
-     * Read "Establishing Wi-Fi or Ethernet Connection" section in
-     * examples/protocols/README.md for more information about this function.
-     */
-    ESP_ERROR_CHECK(example_connect());
 
     /* Start the file server */
     ESP_ERROR_CHECK(example_start_file_server(base_path));
