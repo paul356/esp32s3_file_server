@@ -55,7 +55,7 @@ static const char *TAG = "file_server";
 static esp_err_t index_html_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "307 Temporary Redirect");
-    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_set_hdr(req, "Location", "/get/");
     httpd_resp_send(req, NULL, 0);  // Response body can be empty
     return ESP_OK;
 }
@@ -215,9 +215,10 @@ static esp_err_t download_get_handler(httpd_req_t *req)
     FILE *fd = NULL;
     struct stat file_stat;
 
-    esp_err_t ret = get_storage_file_name(filename, sizeof(filename), ((struct file_server_data *)req->user_ctx)->base_path, req->uri);
+    const char* encoded_path = req->uri + strlen("/get");
+    esp_err_t ret = get_storage_file_name(filename, sizeof(filename), ((struct file_server_data *)req->user_ctx)->base_path, encoded_path);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "filename is too long, len=%u", strlen(req->uri));
+        ESP_LOGE(TAG, "filename is too long, len=%u", strlen(encoded_path));
         /* Respond with 500 Internal Server Error */
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
         return ESP_FAIL;
@@ -229,13 +230,6 @@ static esp_err_t download_get_handler(httpd_req_t *req)
     }
 
     if (stat(filename, &file_stat) == -1) {
-        /* If file not present on SPIFFS check if URI
-         * corresponds to one of the hardcoded paths */
-        if (strcmp(filename, "/index.html") == 0) {
-            return index_html_get_handler(req);
-        } else if (strcmp(filename, "/favicon.ico") == 0) {
-            return favicon_get_handler(req);
-        }
         ESP_LOGE(TAG, "Failed to stat file : %s", filename);
         /* Respond with 404 Not Found */
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File does not exist");
@@ -644,8 +638,26 @@ esp_err_t example_start_file_server(const char *base_path)
     }
 
     /* URI handler for getting uploaded files */
+    httpd_uri_t front_page = {
+        .uri       = "/",  // Match all URIs of type /path/to/file
+        .method    = HTTP_GET,
+        .handler   = index_html_get_handler,
+        .user_ctx  = server_data    // Pass server data as context
+    };
+    httpd_register_uri_handler(server, &front_page);
+
+    /* URI handler for getting uploaded files */
+    httpd_uri_t favicon = {
+        .uri       = "/favicon.ico",  // Match all URIs of type /path/to/file
+        .method    = HTTP_GET,
+        .handler   = favicon_get_handler,
+        .user_ctx  = server_data    // Pass server data as context
+    };
+    httpd_register_uri_handler(server, &favicon);
+
+    /* URI handler for getting uploaded files */
     httpd_uri_t file_download = {
-        .uri       = "/*",  // Match all URIs of type /path/to/file
+        .uri       = "/get/*",  // Match all URIs of type /path/to/file
         .method    = HTTP_GET,
         .handler   = download_get_handler,
         .user_ctx  = server_data    // Pass server data as context
