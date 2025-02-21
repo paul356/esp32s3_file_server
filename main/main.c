@@ -21,6 +21,7 @@
 #include "file_serving_example_common.h"
 #include "config_db.h"
 #include "wifi_intf.h"
+#include "driver/gpio.h"
 
 /* This example demonstrates how to create file server
  * using esp_http_server. This file has only startup code.
@@ -29,7 +30,7 @@
 
 static const char *TAG = "main";
 
-void setup_wifi(void)
+static void setup_wifi(void)
 {
     char ssid[WIFI_SSID_MAX_LEN];
     char passwd[WIFI_PASSWD_MAX_LEN];
@@ -61,6 +62,98 @@ void setup_wifi(void)
     }
 }
 
+static esp_err_t reset_wifi(void)
+{
+    // assume wifi is already inited
+    esp_err_t ret = save_wifi_mode(WIFI_MODE_AP);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save WiFi mode");
+        return ret;
+    }
+
+    ret = save_wifi_ssid(CONFIG_EXAMPLE_DEFAULT_WIFI_AP_SSID);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save WiFi SSID");
+        return ret;
+    }
+
+    ret = save_wifi_passwd(CONFIG_EXAMPLE_DEFAULT_WIFI_AP_PASSWD);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save WiFi password");
+        return ret;
+    }
+
+    ret = wifi_update(WIFI_MODE_AP, CONFIG_EXAMPLE_DEFAULT_WIFI_AP_SSID, CONFIG_EXAMPLE_DEFAULT_WIFI_AP_PASSWD);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to update WiFi configuration");
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+static QueueHandle_t gpio_intr_queue = NULL;
+
+static void gpio_isr_handler(void* arg)
+{
+    gpio_num_t io_num = (gpio_num_t)arg;
+
+    // ignore if queue is full
+    (void)xQueueSendFromISR(gpio_intr_queue, &io_num, NULL);
+}
+
+static void gpio_intr_task(void* arg)
+{
+    gpio_num_t io_num;
+    for (;;) {
+        if (xQueueReceive(gpio_intr_queue, &io_num, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        switch (io_num) {
+        case GPIO_NUM_18:
+            ESP_LOGI(TAG, "GPIO 18 is triggered");
+            break;
+        case GPIO_NUM_8:
+            ESP_LOGI(TAG, "Will reset WiFi to AP mode");
+            (void)reset_wifi();
+            break;
+        default:
+            ESP_LOGE(TAG, "Unexpected GPIO %u is triggered", io_num);
+            break;
+        }
+    }
+}
+
+static void setup_gpio_intr(void)
+{
+    gpio_intr_queue = xQueueCreate(5, sizeof(gpio_num_t));
+    if (!gpio_intr_queue) {
+        ESP_LOGE(TAG, "Failed to create queue for GPIO interrupt");
+        return;
+    }
+
+    int ret = xTaskCreate(gpio_intr_task, "gpio_intr_task", 8192, NULL, 10, NULL);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create task for GPIO interrupt");
+        return;
+    }
+
+    gpio_config_t io_conf = {
+        .intr_type= GPIO_INTR_NEGEDGE,
+        .mode = GPIO_MODE_INPUT,
+        .pin_bit_mask = 1 << GPIO_NUM_18 | 1 << GPIO_NUM_8,
+        .pull_down_en = 0,
+        .pull_up_en = 1,
+    };
+
+    gpio_config(&io_conf);
+
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(GPIO_NUM_18, gpio_isr_handler, (void*)GPIO_NUM_18);
+    gpio_isr_handler_add(GPIO_NUM_8, gpio_isr_handler, (void*)GPIO_NUM_8);
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Starting example");
@@ -68,6 +161,8 @@ void app_main(void)
 
     // esp_netif_init and esp_event_loop_create_default are called by wifi_init
     setup_wifi();
+
+    setup_gpio_intr();
     
     /* Initialize file storage */
     const char* base_path = "/data";

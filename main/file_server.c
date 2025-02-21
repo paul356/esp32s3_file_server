@@ -520,26 +520,71 @@ static esp_err_t parse_http_req(httpd_req_t* req, cJSON** root)
     return ESP_OK;
 }
 
+struct wifi_config_param_t {
+    wifi_mode_t mode;
+    char ssid[WIFI_SSID_MAX_LEN];
+    char passwd[WIFI_PASSWD_MAX_LEN];
+};
+
+static void wifi_update_task(void* param)
+{
+    struct wifi_config_param_t* wifi_param = (struct wifi_config_param_t*)param;
+
+    // let http server process request first
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    esp_err_t ret = wifi_update(wifi_param->mode, wifi_param->ssid, wifi_param->passwd);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to update WiFi config");
+        goto free_param;
+    }
+
+    ret = save_wifi_mode(wifi_param->mode);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save WiFi mode");
+        goto free_param;
+    }
+
+    ret = save_wifi_ssid(wifi_param->ssid);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save WiFi SSID");
+        goto free_param;
+    }
+
+    ret = save_wifi_passwd(wifi_param->passwd);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save WiFi password");
+        goto free_param;
+    }
+
+free_param:
+    free(wifi_param);
+}
+
 static esp_err_t update_wifi_config(wifi_mode_t mode, const char* ssid, const char* passwd)
 {
-    esp_err_t ret = wifi_update(mode, ssid, passwd);
-    if (ret != ESP_OK) {
-        return ret;
+    struct wifi_config_param_t* wifi_param = (struct wifi_config_param_t*)malloc(sizeof(struct wifi_config_param_t));
+    if (!wifi_param) {
+        return ESP_ERR_NO_MEM;
     }
 
-    ret = save_wifi_mode(mode);
-    if (ret != ESP_OK) {
-        return ret;
+    wifi_param->mode = mode;
+    size_t req_len = strlcpy(wifi_param->ssid, ssid, WIFI_SSID_MAX_LEN);
+    if (req_len >= WIFI_SSID_MAX_LEN) {
+        free(wifi_param);
+        return ESP_ERR_NO_MEM;
     }
 
-    ret = save_wifi_ssid(ssid);
-    if (ret != ESP_OK) {
-        return ret;
+    req_len = strlcpy(wifi_param->passwd, passwd, WIFI_PASSWD_MAX_LEN);
+    if (req_len >= WIFI_PASSWD_MAX_LEN) {
+        free(wifi_param);
+        return ESP_ERR_NO_MEM;
     }
 
-    ret = save_wifi_passwd(passwd);
-    if (ret != ESP_OK) {
-        return ret;
+    int ret = xTaskCreate(wifi_update_task, "wifi_update_task", 8192, wifi_param, 5, NULL);
+    if (ret != pdPASS) {
+        free(wifi_param);
+        return ESP_ERR_NO_MEM;
     }
 
     return ESP_OK;
@@ -582,6 +627,7 @@ static esp_err_t process_wifi_config_json(httpd_req_t *req)
     ret = update_wifi_config(mode_val, ssid_str, passwd_str);
     if (ret != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to update WiFi config");
+        goto err_out;
     }
 
 err_out:
@@ -597,7 +643,12 @@ static esp_err_t device_config_put_handler(httpd_req_t *req)
     const char* last_token = req->uri + strlen(prefix);
 
     if (strcmp(last_token, "wifi") == 0) {
-        return process_wifi_config_json(req);
+        esp_err_t ret = process_wifi_config_json(req);
+        if (ret == ESP_OK) {
+            httpd_resp_sendstr_chunk(req, "Processing request ...");
+            httpd_resp_sendstr_chunk(req, NULL);
+        }
+        return ret;
     } else {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Device config not found");
         return ESP_FAIL;
