@@ -44,34 +44,14 @@ struct file_server_data {
     /* Base path of file storage */
     char base_path[ESP_VFS_PATH_MAX + 1];
 
+    /* static web files base path */
+    char static_files_path[ESP_VFS_PATH_MAX + 1];
+    
     /* Scratch buffer for temporary storage during file transfer */
     char scratch[SCRATCH_BUFSIZE];
 };
 
 static const char *TAG = "file_server";
-
-/* Handler to redirect incoming GET request for /index.html to /
- * This can be overridden by uploading file with same name */
-static esp_err_t index_html_get_handler(httpd_req_t *req)
-{
-    httpd_resp_set_status(req, "307 Temporary Redirect");
-    httpd_resp_set_hdr(req, "Location", "/get/");
-    httpd_resp_send(req, NULL, 0);  // Response body can be empty
-    return ESP_OK;
-}
-
-/* Handler to respond with an icon file embedded in flash.
- * Browsers expect to GET website icon at URI /favicon.ico.
- * This can be overridden by uploading file with same name */
-static esp_err_t favicon_get_handler(httpd_req_t *req)
-{
-    extern const unsigned char favicon_ico_start[] asm("_binary_favicon_ico_start");
-    extern const unsigned char favicon_ico_end[]   asm("_binary_favicon_ico_end");
-    const size_t favicon_ico_size = (favicon_ico_end - favicon_ico_start);
-    httpd_resp_set_type(req, "image/x-icon");
-    httpd_resp_send(req, (const char *)favicon_ico_start, favicon_ico_size);
-    return ESP_OK;
-}
 
 /* Send HTTP response with a run-time generated html consisting of
  * a list of all files and folders under the requested path.
@@ -158,6 +138,12 @@ static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filena
         return httpd_resp_set_type(req, "image/jpeg");
     } else if (IS_FILE_EXT(filename, ".ico")) {
         return httpd_resp_set_type(req, "image/x-icon");
+    } else if (IS_FILE_EXT(filename, ".css")) {
+        return httpd_resp_set_type(req, "text/css");
+    } else if (IS_FILE_EXT(filename, ".js")) {
+        return httpd_resp_set_type(req, "text/javascript");
+    } else if (IS_FILE_EXT(filename, ".json")) {
+        return httpd_resp_set_type(req, "application/json");
     }
     /* This is a limited set only */
     /* For any other type always set as plain text */
@@ -191,14 +177,14 @@ static esp_err_t get_storage_file_name(char* dest, size_t dest_size, const char 
 }
 
 /* Handler to download a file kept on the server */
-static esp_err_t download_get_handler(httpd_req_t *req)
+static esp_err_t get_file_from_storage(httpd_req_t *req, const char* uri_prefix, const char* base_path, bool handle_dir)
 {
     char filename[FILE_PATH_MAX+1];
     FILE *fd = NULL;
     struct stat file_stat;
 
-    const char* encoded_path = req->uri + strlen("/get");
-    esp_err_t ret = get_storage_file_name(filename, sizeof(filename), ((struct file_server_data *)req->user_ctx)->base_path, encoded_path);
+    const char* encoded_path = req->uri + strlen(uri_prefix);
+    esp_err_t ret = get_storage_file_name(filename, sizeof(filename), base_path, encoded_path);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "filename is too long, len=%u", strlen(encoded_path));
         /* Respond with 500 Internal Server Error */
@@ -208,7 +194,14 @@ static esp_err_t download_get_handler(httpd_req_t *req)
 
     /* If name has trailing '/', respond with directory contents */
     if (filename[strlen(filename) - 1] == '/') {
-        return http_resp_dir_json(req, filename);
+        if (handle_dir) {
+            return http_resp_dir_json(req, filename);
+        } else {
+            ESP_LOGE(TAG, "can't return dir: %s", filename);
+            /* Respond with 404 Not Found */
+            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File does not exist");
+            return ESP_FAIL;            
+        }
     }
 
     if (stat(filename, &file_stat) == -1) {
@@ -262,6 +255,23 @@ static esp_err_t download_get_handler(httpd_req_t *req)
 #endif
     httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
+}
+
+/* Handler to download a file kept on the server */
+static esp_err_t download_get_handler(httpd_req_t *req)
+{
+    const char* uri_prefix = "/get";
+    const char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
+
+    return get_file_from_storage(req, uri_prefix, base_path, true);
+}
+
+static esp_err_t static_files_get_handler(httpd_req_t *req)
+{
+    const char* uri_prefix = "";
+    const char* base_path = ((struct file_server_data *)req->user_ctx)->static_files_path;
+
+    return get_file_from_storage(req, uri_prefix, base_path, false);    
 }
 
 /* Handler to upload a file onto the server */
@@ -638,7 +648,7 @@ static esp_err_t device_config_put_handler(httpd_req_t *req)
 }
 
 /* Function to start the file server */
-esp_err_t example_start_file_server(const char *base_path)
+esp_err_t example_start_file_server(const char *base_path, const char *web_path)
 {
     static struct file_server_data *server_data = NULL;
 
@@ -655,6 +665,8 @@ esp_err_t example_start_file_server(const char *base_path)
     }
     strlcpy(server_data->base_path, base_path,
             sizeof(server_data->base_path));
+    strlcpy(server_data->static_files_path, web_path,
+            sizeof(server_data->static_files_path));
 
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -669,24 +681,6 @@ esp_err_t example_start_file_server(const char *base_path)
         ESP_LOGE(TAG, "Failed to start file server!");
         return ESP_FAIL;
     }
-
-    /* URI handler for getting uploaded files */
-    httpd_uri_t front_page = {
-        .uri       = "/",  // Match all URIs of type /path/to/file
-        .method    = HTTP_GET,
-        .handler   = index_html_get_handler,
-        .user_ctx  = server_data    // Pass server data as context
-    };
-    httpd_register_uri_handler(server, &front_page);
-
-    /* URI handler for getting uploaded files */
-    httpd_uri_t favicon = {
-        .uri       = "/favicon.ico",  // Match all URIs of type /path/to/file
-        .method    = HTTP_GET,
-        .handler   = favicon_get_handler,
-        .user_ctx  = server_data    // Pass server data as context
-    };
-    httpd_register_uri_handler(server, &favicon);
 
     /* URI handler for getting uploaded files */
     httpd_uri_t file_download = {
@@ -730,6 +724,15 @@ esp_err_t example_start_file_server(const char *base_path)
         .user_ctx  = server_data
     };
     httpd_register_uri_handler(server, &device_config_query);
+
+    /* URI handler for getting uploaded files */
+    httpd_uri_t static_page = {
+        .uri       = "/*",  // Match all URIs of type /path/to/file
+        .method    = HTTP_GET,
+        .handler   = static_files_get_handler,
+        .user_ctx  = server_data    // Pass server data as context
+    };
+    httpd_register_uri_handler(server, &static_page);
     
     return ESP_OK;
 }

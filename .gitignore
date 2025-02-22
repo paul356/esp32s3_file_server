@@ -1,0 +1,13 @@
+*~
+build/
+TAGS
+*.lock
+sdkconfig.old
+Makefile
+\#*\#
+.\#*
+.npmrc
+web/dist/
+web/node_modules/
+web/jsconfig.json
+web/package-lock.json

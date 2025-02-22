@@ -168,7 +168,10 @@ void app_main(void)
     const char* base_path = "/data";
     ESP_ERROR_CHECK(example_mount_storage(base_path));
 
+    const char* web_path = "/spiffs";
+    ESP_ERROR_CHECK(mount_web_storage(web_path));
+    
     /* Start the file server */
-    ESP_ERROR_CHECK(example_start_file_server(base_path));
+    ESP_ERROR_CHECK(example_start_file_server(base_path, web_path));
     ESP_LOGI(TAG, "File server started");
 }
