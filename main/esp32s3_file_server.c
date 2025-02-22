@@ -77,7 +77,7 @@ static esp_err_t favicon_get_handler(httpd_req_t *req)
  * a list of all files and folders under the requested path.
  * In case of SPIFFS this returns empty list when path is any
  * string other than '/', since SPIFFS doesn't support directories */
-static esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
+static esp_err_t http_resp_dir_json(httpd_req_t *req, const char *dirpath)
 {
     char entrypath[FILE_PATH_MAX];
     char entrysize[16];
@@ -99,23 +99,10 @@ static esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
         return ESP_FAIL;
     }
 
-    /* Send HTML file header */
-    httpd_resp_sendstr_chunk(req, "<!DOCTYPE html><html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"></head><body>");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr_chunk(req, "[\n");
 
-    /* Get handle to embedded file upload script */
-    extern const unsigned char upload_script_start[] asm("_binary_upload_script_html_start");
-    extern const unsigned char upload_script_end[]   asm("_binary_upload_script_html_end");
-    const size_t upload_script_size = (upload_script_end - upload_script_start);
-
-    /* Add file upload form and script which on execution sends a POST request to /upload */
-    httpd_resp_send_chunk(req, (const char *)upload_script_start, upload_script_size);
-
-    /* Send file-list table definition and column labels */
-    httpd_resp_sendstr_chunk(req,
-        "<table class=\"fixed\" border=\"1\">"
-        "<col width=\"800px\" /><col width=\"300px\" /><col width=\"300px\" /><col width=\"100px\" />"
-        "<thead><tr><th>Name</th><th>Type</th><th>Size (Bytes)</th><th>Delete</th></tr></thead>"
-        "<tbody>");
+    bool first_entry = true;
 
     /* Iterate over all files / folders and fetch their names and sizes */
     while ((entry = readdir(dir)) != NULL) {
@@ -129,33 +116,28 @@ static esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
         sprintf(entrysize, "%ld", entry_stat.st_size);
         ESP_LOGI(TAG, "Found %s : %s (%s bytes)", entrytype, entry->d_name, entrysize);
 
-        /* Send chunk of HTML file containing table entries with file name and size */
-        httpd_resp_sendstr_chunk(req, "<tr><td><a href=\"");
-        httpd_resp_sendstr_chunk(req, req->uri);
+        if (first_entry) {
+            httpd_resp_sendstr_chunk(req, "{\n");
+            first_entry = false;
+        } else {
+            httpd_resp_sendstr_chunk(req, ",\n{\n");
+        }
+        httpd_resp_sendstr_chunk(req, "\"name\":\"");
         httpd_resp_sendstr_chunk(req, entry->d_name);
         if (entry->d_type == DT_DIR) {
-            httpd_resp_sendstr_chunk(req, "/");
+            // add a path seperator at the end of directories
+            httpd_resp_sendstr_chunk(req, "/\",\n");
+        } else {
+            httpd_resp_sendstr_chunk(req, "\",\n");
         }
-        httpd_resp_sendstr_chunk(req, "\">");
-        httpd_resp_sendstr_chunk(req, entry->d_name);
-        httpd_resp_sendstr_chunk(req, "</a></td><td>");
-        httpd_resp_sendstr_chunk(req, entrytype);
-        httpd_resp_sendstr_chunk(req, "</td><td>");
+        httpd_resp_sendstr_chunk(req, "\"size\":");
         httpd_resp_sendstr_chunk(req, entrysize);
-        httpd_resp_sendstr_chunk(req, "</td><td>");
-        httpd_resp_sendstr_chunk(req, "<form method=\"post\" action=\"/delete");
-        httpd_resp_sendstr_chunk(req, req->uri);
-        httpd_resp_sendstr_chunk(req, entry->d_name);
-        httpd_resp_sendstr_chunk(req, "\"><button type=\"submit\">Delete</button></form>");
-        httpd_resp_sendstr_chunk(req, "</td></tr>\n");
+        httpd_resp_sendstr_chunk(req, "\n}");
     }
     closedir(dir);
 
     /* Finish the file list table */
-    httpd_resp_sendstr_chunk(req, "</tbody></table>");
-
-    /* Send remaining chunk of HTML file to complete it */
-    httpd_resp_sendstr_chunk(req, "</body></html>");
+    httpd_resp_sendstr_chunk(req, "]");
 
     /* Send empty chunk to signal HTTP response completion */
     httpd_resp_sendstr_chunk(req, NULL);
@@ -226,7 +208,7 @@ static esp_err_t download_get_handler(httpd_req_t *req)
 
     /* If name has trailing '/', respond with directory contents */
     if (filename[strlen(filename) - 1] == '/') {
-        return http_resp_dir_html(req, filename);
+        return http_resp_dir_json(req, filename);
     }
 
     if (stat(filename, &file_stat) == -1) {
@@ -489,7 +471,7 @@ static esp_err_t device_config_get_handler(httpd_req_t *req)
     const char* prefix = "/device/";
     const char* last_token = req->uri + strlen(prefix);
 
-    if (strcmp(last_token, "wifi") == 0) {
+    if (strcasecmp(last_token, "wifi") == 0) {
         return send_wifi_config_json(req);
     } else {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Device config not found");
@@ -642,7 +624,7 @@ static esp_err_t device_config_put_handler(httpd_req_t *req)
     const char* prefix = "/device/";
     const char* last_token = req->uri + strlen(prefix);
 
-    if (strcmp(last_token, "wifi") == 0) {
+    if (strcasecmp(last_token, "wifi") == 0) {
         esp_err_t ret = process_wifi_config_json(req);
         if (ret == ESP_OK) {
             httpd_resp_sendstr_chunk(req, "Processing request ...");
