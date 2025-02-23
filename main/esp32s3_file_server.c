@@ -196,6 +196,13 @@ static esp_err_t get_file_from_storage(httpd_req_t *req, const char* uri_prefix,
     if (filename[strlen(filename) - 1] == '/') {
         if (handle_dir) {
             return http_resp_dir_json(req, filename);
+        } else if (strcmp(&filename[strlen(base_path)], "/") == 0) {
+            if (strlcat(filename, "index.html", sizeof(filename)) >= sizeof(filename)) {
+                ESP_LOGE(TAG, "filename is too long");
+                /* Respond with 500 Internal Server Error */
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Not enough space for filename");
+                return ESP_FAIL;
+            }
         } else {
             ESP_LOGE(TAG, "can't return dir: %s", filename);
             /* Respond with 404 Not Found */
