@@ -40,6 +40,8 @@
 /* Scratch buffer size */
 #define SCRATCH_BUFSIZE  8192
 
+#define MKDIR_MASK 0744
+
 struct file_server_data {
     /* Base path of file storage */
     char base_path[ESP_VFS_PATH_MAX + 1];
@@ -292,47 +294,17 @@ static esp_err_t static_files_get_handler(httpd_req_t *req)
     return get_file_from_storage(req, uri_prefix, base_path, false);    
 }
 
-/* Handler to upload a file onto the server */
-static esp_err_t upload_post_handler(httpd_req_t *req)
+static esp_err_t upload_file(httpd_req_t *req, const char* file_path)
 {
-    char file_name[FILE_PATH_MAX+1];
-    FILE *fd = NULL;
-    struct stat file_stat;
-
-    /* Skip leading "/upload" from URI to get filename */
-    /* Note sizeof() counts NULL termination hence the -1 */
-    const char* encoded_path = req->uri + strlen("/upload");
-    const char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
-
-    esp_err_t ret = get_storage_file_name(file_name, sizeof(file_name), base_path, encoded_path);
-    if (ret != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "can't parse filename");
-        return ESP_FAIL;
-    }
-
-    /* Filename cannot have a trailing '/' */
-    if (file_name[strlen(file_name) - 1] == '/') {
-        ESP_LOGE(TAG, "Invalid filename : %s", file_name);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Invalid filename");
-        return ESP_FAIL;
-    }
-
-    if (stat(file_name, &file_stat) == 0) {
-        ESP_LOGE(TAG, "File already exists : %s", file_name);
-        /* Respond with 400 Bad Request */
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File already exists");
-        return ESP_FAIL;
-    }
-
-    fd = fopen(file_name, "w");
+    FILE *fd = fopen(file_path, "w");
     if (!fd) {
-        ESP_LOGE(TAG, "Failed to create file : %s", file_name);
+        ESP_LOGE(TAG, "Failed to create file : %s", file_path);
         /* Respond with 500 Internal Server Error */
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create file");
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Receiving file : %s...", file_name);
+    ESP_LOGI(TAG, "Receiving file : %s...", file_path);
 
     /* Retrieve the pointer to scratch buffer for temporary storage */
     char *buf = ((struct file_server_data *)req->user_ctx)->scratch;
@@ -355,7 +327,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
             /* In case of unrecoverable error,
              * close and delete the unfinished file*/
             fclose(fd);
-            unlink(file_name);
+            unlink(file_path);
 
             ESP_LOGE(TAG, "File reception failed!");
             /* Respond with 500 Internal Server Error */
@@ -368,7 +340,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
             /* Couldn't write everything to file!
              * Storage may be full? */
             fclose(fd);
-            unlink(file_name);
+            unlink(file_path);
 
             ESP_LOGE(TAG, "File write failed!");
             /* Respond with 500 Internal Server Error */
@@ -385,14 +357,62 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     fclose(fd);
     ESP_LOGI(TAG, "File reception complete");
 
-    /* Redirect onto root to see the updated file list */
-    httpd_resp_set_status(req, "303 See Other");
-    httpd_resp_set_hdr(req, "Location", "/");
 #ifdef CONFIG_EXAMPLE_HTTPD_CONN_CLOSE_HEADER
     httpd_resp_set_hdr(req, "Connection", "close");
 #endif
     httpd_resp_sendstr(req, "File uploaded successfully");
     return ESP_OK;
+}
+
+static esp_err_t make_directory(httpd_req_t *req, const char* abs_path)
+{
+    int ret = mkdir(abs_path, MKDIR_MASK);
+    if (ret != 0) {
+        ESP_LOGE(TAG, "Failed to create directory : %s", abs_path);
+        /* Respond with 500 Internal Server Error */
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create directory");
+        return ESP_FAIL;
+    }
+
+#ifdef CONFIG_EXAMPLE_HTTPD_CONN_CLOSE_HEADER
+    httpd_resp_set_hdr(req, "Connection", "close");
+#endif
+    httpd_resp_sendstr(req, "Directory created successfully");
+    return ESP_OK;
+}
+
+/* Handler to upload a file onto the server */
+static esp_err_t upload_post_handler(httpd_req_t *req)
+{
+    char file_name[FILE_PATH_MAX+1];
+    struct stat file_stat;
+
+    /* Skip leading "/upload" from URI to get filename */
+    /* Note sizeof() counts NULL termination hence the -1 */
+    const char* encoded_path = req->uri + strlen("/upload");
+    const char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
+
+    esp_err_t ret = get_storage_file_name(file_name, sizeof(file_name), base_path, encoded_path);
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "can't parse filename");
+        return ESP_FAIL;
+    }
+
+    /* Filename cannot have a trailing '/' */
+    bool is_dir = file_name[strlen(file_name) - 1] == '/';
+
+    if (stat(file_name, &file_stat) == 0) {
+        ESP_LOGE(TAG, "File already exists : %s", file_name);
+        /* Respond with 400 Bad Request */
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File already exists");
+        return ESP_FAIL;
+    }
+
+    if (is_dir) {
+        return make_directory(req, file_name);
+    } else {
+        return upload_file(req, file_name);
+    }
 }
 
 /* Handler to delete a file from the server */
@@ -428,9 +448,6 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
     /* Delete file */
     unlink(filename);
 
-    /* Redirect onto root to see the updated file list */
-    httpd_resp_set_status(req, "303 See Other");
-    httpd_resp_set_hdr(req, "Location", "/");
 #ifdef CONFIG_EXAMPLE_HTTPD_CONN_CLOSE_HEADER
     httpd_resp_set_hdr(req, "Connection", "close");
 #endif
@@ -721,7 +738,7 @@ esp_err_t example_start_file_server(const char *base_path, const char *web_path)
     /* URI handler for deleting files from server */
     httpd_uri_t file_delete = {
         .uri       = "/delete/*",   // Match all URIs of type /delete/path/to/file
-        .method    = HTTP_POST,
+        .method    = HTTP_DELETE,
         .handler   = delete_post_handler,
         .user_ctx  = server_data    // Pass server data as context
     };
