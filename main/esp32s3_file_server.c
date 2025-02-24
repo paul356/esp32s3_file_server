@@ -110,6 +110,17 @@ static esp_err_t http_resp_dir_json(httpd_req_t *req, const char *dirpath)
         } else {
             httpd_resp_sendstr_chunk(req, "\",\n");
         }
+
+        httpd_resp_sendstr_chunk(req, "\"mtime\":\"");
+        const char *time_str = ctime(&entry_stat.st_mtime);
+        if (time_str && strlen(time_str) > 1) {
+            httpd_resp_send_chunk(req, time_str, strlen(time_str) - 1);
+        } else {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read mtime");
+            return ESP_FAIL;
+        }
+        httpd_resp_sendstr_chunk(req, "\",\n");
+
         httpd_resp_sendstr_chunk(req, "\"size\":");
         httpd_resp_sendstr_chunk(req, entrysize);
         httpd_resp_sendstr_chunk(req, "\n}");
