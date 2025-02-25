@@ -430,12 +430,7 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Filename cannot have a trailing '/' */
-    if (filename[strlen(filename) - 1] == '/') {
-        ESP_LOGE(TAG, "Invalid filename : %s", filename);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Invalid filename");
-        return ESP_FAIL;
-    }
+    bool is_dir = filename[strlen(filename) - 1] == '/';
 
     if (stat(filename, &file_stat) == -1) {
         ESP_LOGE(TAG, "File does not exist : %s", filename);
@@ -444,9 +439,19 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Deleting file : %s", filename);
-    /* Delete file */
-    unlink(filename);
+    int res = 0;
+    if (!is_dir) {
+        ESP_LOGI(TAG, "Deleting file : %s", filename);
+        /* Delete file */
+        res = unlink(filename);
+    } else {
+        res = rmdir(filename);
+    }
+
+    if (res != 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "can't delete entry");
+        return ESP_FAIL;
+    }
 
 #ifdef CONFIG_EXAMPLE_HTTPD_CONN_CLOSE_HEADER
     httpd_resp_set_hdr(req, "Connection", "close");

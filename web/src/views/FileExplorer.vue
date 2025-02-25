@@ -208,9 +208,10 @@ td {
     text-align: left;
 }
 .path_container {
-    flex-grow: 0;
+    display: flex;
     flex-direction: row;
-    gap: 1px;
+    gap: 2px;
+    justify-content: center;
 }
 .upload_container {
     display: grid;
