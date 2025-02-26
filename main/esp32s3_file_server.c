@@ -39,6 +39,10 @@
 
 /* Scratch buffer size */
 #define SCRATCH_BUFSIZE  8192
+#define SCRATCH_NUMBER 3
+
+#define USE_ASYNC_READ 1
+#define ASYNC_READ_FILE_THRESHOLD (1024 * 1024)
 
 #define MKDIR_MASK 0744
 
@@ -50,10 +54,118 @@ struct file_server_data {
     char static_files_path[ESP_VFS_PATH_MAX + 1];
     
     /* Scratch buffer for temporary storage during file transfer */
-    char scratch[SCRATCH_BUFSIZE];
+    char scratch[SCRATCH_BUFSIZE * SCRATCH_NUMBER];
 };
 
+typedef struct {
+    FILE* fp;
+    char* req_buf;
+    size_t buf_size;
+    bool is_read;
+    esp_err_t err;
+} io_req_item_t;
+
+typedef io_req_item_t io_resp_item_t;
+
+typedef struct {
+    QueueHandle_t req_que;
+    QueueHandle_t resp_que;
+    TaskHandle_t task_handle;
+} io_thread_param_t;
+
 static const char *TAG = "file_server";
+
+static void free_io_thread_param(io_thread_param_t* param) {
+    if (param) {
+        if (param->req_que) {
+            vQueueDelete(param->req_que);
+        }
+        if (param->resp_que) {
+            vQueueDelete(param->resp_que);
+        }
+        free(param);
+    }
+}
+
+static void io_thread_task_func(void* param)
+{
+    io_thread_param_t* io_param = (io_thread_param_t*)param;
+
+    while (1) {
+        io_req_item_t req_item;
+        if (xQueueReceive(io_param->req_que, &req_item, portMAX_DELAY) != pdTRUE) {
+            ESP_LOGW(TAG, "Receive request item timeout");
+            continue;
+        }
+
+        // special signal
+        if (req_item.fp == NULL) {
+            TaskHandle_t task = io_param->task_handle;
+            free_io_thread_param(io_param);
+            vTaskDelete(task);
+            break;
+        }
+
+        io_resp_item_t resp_item = req_item;
+        if (req_item.is_read) {
+            int read_size = fread(resp_item.req_buf, 1, req_item.buf_size, req_item.fp);
+            if (read_size <= 0) {
+                resp_item.buf_size = 0;
+                resp_item.err = ESP_FAIL;
+            } else {
+                resp_item.buf_size = read_size;
+                resp_item.err = ESP_OK;
+            }
+        } else {
+            int write_size = fwrite(req_item.req_buf, 1, req_item.buf_size, req_item.fp);
+            if (write_size != req_item.buf_size) {
+                resp_item.err = ESP_FAIL;
+            } else {
+                resp_item.err = ESP_OK;
+            }
+        }
+
+        if (xQueueSend(io_param->resp_que, &resp_item, portMAX_DELAY) != pdTRUE) {
+            // data will be lost here
+            ESP_LOGE(TAG, "Failed to send response item");
+        }
+    }
+}
+
+static esp_err_t create_async_io_thread(io_thread_param_t** param) {
+    // Add 1 for the last special request item
+    QueueHandle_t req_que = xQueueCreate(SCRATCH_NUMBER+1, sizeof(io_req_item_t));
+    if (req_que == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    QueueHandle_t resp_que = xQueueCreate(SCRATCH_NUMBER, sizeof(io_resp_item_t));
+    if (resp_que == NULL) {
+        vQueueDelete(req_que);
+        return ESP_ERR_NO_MEM;
+    }
+
+    io_thread_param_t *io_param = (io_thread_param_t *)malloc(sizeof(io_thread_param_t));
+    if (io_param == NULL) {
+        vQueueDelete(req_que);
+        vQueueDelete(resp_que);
+        return ESP_ERR_NO_MEM;
+    }
+
+    io_param->req_que = req_que;
+    io_param->resp_que = resp_que;
+    io_param->task_handle = NULL;
+
+    int res = xTaskCreate(io_thread_task_func, "http_io_thread", 4096, io_param, 10, &io_param->task_handle);
+    if (res != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create task for http io thread.");
+        free_io_thread_param(io_param);
+        return ESP_ERR_NO_MEM;
+    }
+
+    *param = io_param;
+    return ESP_OK;
+}
 
 /* Send HTTP response with a run-time generated html consisting of
  * a list of all files and folders under the requested path.
@@ -189,6 +301,68 @@ static esp_err_t get_storage_file_name(char* dest, size_t dest_size, const char 
     return ESP_OK;
 }
 
+static esp_err_t send_buf_to_io_thread(io_thread_param_t* io_param, FILE* fp, char* buf, size_t buf_len, bool is_read)
+{
+    io_req_item_t req_item = {
+        .fp = fp,
+        .req_buf = buf,
+        .buf_size = buf_len,
+        .is_read = is_read,
+        .err = ESP_OK
+    };
+                
+    if (xQueueSend(io_param->req_que, &req_item, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to queue an request item");
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t init_async_io_thread(struct file_server_data* server_data, io_thread_param_t** io_param, FILE* fp, bool is_read)
+{
+    esp_err_t ret = create_async_io_thread(io_param);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Not enough resource to create async io thread");
+        // switch to read synchronously
+        return ESP_OK;
+    } else {
+        // send buffers to the async thread
+        for (int i = 0; i < SCRATCH_NUMBER; i++) {
+            ret = send_buf_to_io_thread(*io_param, fp, &(server_data->scratch[SCRATCH_BUFSIZE * i]), SCRATCH_BUFSIZE, is_read);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to queue buffers to async io thread");
+                return ret;
+            }
+        }
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t read_from_io_thread(io_thread_param_t* io_param, char** buf, size_t* buf_size)
+{
+    io_resp_item_t resp_item;
+    if (xQueueReceive(io_param->resp_que, &resp_item, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to recieve an request item from queue");
+        return ESP_FAIL;
+    }
+
+    if (resp_item.is_read != true) {
+        ESP_LOGE(TAG, "unexpected response from queue");
+        return ESP_FAIL;
+    }
+
+    if (resp_item.err == ESP_OK) {
+        *buf = resp_item.req_buf;
+        *buf_size = resp_item.buf_size;
+    } else {
+        *buf = resp_item.req_buf;
+        *buf_size = 0;
+    }
+    return ESP_OK;
+}
+
 /* Handler to download a file kept on the server */
 static esp_err_t get_file_from_storage(httpd_req_t *req, const char* uri_prefix, const char* base_path, bool handle_dir)
 {
@@ -242,39 +416,81 @@ static esp_err_t get_file_from_storage(httpd_req_t *req, const char* uri_prefix,
     ESP_LOGI(TAG, "Sending file : %s (%ld bytes)...", filename, file_stat.st_size);
     set_content_type_from_file(req, filename);
 
+    io_thread_param_t* io_param = NULL;
+#if USE_ASYNC_READ
+    if (file_stat.st_size >= ASYNC_READ_FILE_THRESHOLD) {
+        ret = init_async_io_thread((struct file_server_data *)req->user_ctx, &io_param, fd, true);
+        if (ret != ESP_OK) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "internal error");
+            goto free_resources;
+        }
+    }
+#endif
+
     /* Retrieve the pointer to scratch buffer for temporary storage */
-    char *chunk = ((struct file_server_data *)req->user_ctx)->scratch;
     size_t chunksize;
     do {
         /* Read file in chunks into the scratch buffer */
-        chunksize = fread(chunk, 1, SCRATCH_BUFSIZE, fd);
-
+        char* chunk = NULL;
+        if (io_param) {
+            ret = read_from_io_thread(io_param, &chunk, &chunksize);
+            if (ret != ESP_OK) {
+                /* Abort sending file */
+                httpd_resp_sendstr_chunk(req, NULL);
+                /* Respond with 500 Internal Server Error */
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read file");
+                goto free_resources;
+            }
+        } else {
+            chunk = ((struct file_server_data *)req->user_ctx)->scratch;
+            chunksize = fread(chunk, 1, SCRATCH_BUFSIZE, fd);
+        }
         if (chunksize > 0) {
             /* Send the buffer contents as HTTP response chunk */
-            if (httpd_resp_send_chunk(req, chunk, chunksize) != ESP_OK) {
-                fclose(fd);
+            ret = httpd_resp_send_chunk(req, chunk, chunksize);
+            if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "File sending failed!");
                 /* Abort sending file */
                 httpd_resp_sendstr_chunk(req, NULL);
                 /* Respond with 500 Internal Server Error */
                 httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send file");
-               return ESP_FAIL;
-           }
+                goto free_resources;
+            }
+
+            if (io_param != NULL) {
+                ret = send_buf_to_io_thread(io_param, fd, chunk, SCRATCH_BUFSIZE, true);
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to requeue read buffer");
+                    httpd_resp_sendstr_chunk(req, NULL);
+                    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "internal error");
+                    goto free_resources;
+                }
+            }
         }
 
         /* Keep looping till the whole file is sent */
     } while (chunksize != 0);
 
+free_resources:
     /* Close file after sending complete */
     fclose(fd);
-    ESP_LOGI(TAG, "File sending complete");
+    if (io_param) {
+        esp_err_t ret2 = send_buf_to_io_thread(io_param, NULL, NULL, 0, true);
+        if (ret2 != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to requeue read buffer");
+        }
+    }
 
-    /* Respond with an empty chunk to signal HTTP response completion */
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "File sending complete");
+
+        /* Respond with an empty chunk to signal HTTP response completion */
 #ifdef CONFIG_EXAMPLE_HTTPD_CONN_CLOSE_HEADER
-    httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_set_hdr(req, "Connection", "close");
 #endif
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
+        httpd_resp_send_chunk(req, NULL, 0);
+    }
+    return ret;
 }
 
 /* Handler to download a file kept on the server */
