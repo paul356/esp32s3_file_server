@@ -117,3 +117,11 @@ I (35943) file_server: Sending file : /test.html (574 bytes)...
 I (35953) file_server: File sending complete
 I (45363) file_server: Deleting file : /test.html
 ```
+
+## GPIO Interrupt Handling
+
+This example includes GPIO interrupt handling to reset the WiFi configuration to AP mode when a specific GPIO is triggered. The GPIO interrupt handling is implemented in the `main/main.c` file.
+
+## WiFi Setup
+
+The WiFi setup is configured to read the SSID and password from the configuration and initialize the WiFi in either STA or AP mode. The WiFi setup is implemented in the `main/main.c` file.

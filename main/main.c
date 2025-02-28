@@ -22,6 +22,7 @@
 #include "config_db.h"
 #include "wifi_intf.h"
 #include "driver/gpio.h"
+#include "display.h"
 
 /* This example demonstrates how to create file server
  * using esp_http_server. This file has only startup code.
@@ -163,15 +164,20 @@ void app_main(void)
     setup_wifi();
 
     setup_gpio_intr();
-    
+
+    // Initialize the display
+    ESP_ERROR_CHECK(display_init());
+
     /* Initialize file storage */
     const char* base_path = "/data";
     ESP_ERROR_CHECK(example_mount_storage(base_path));
 
     const char* web_path = "/spiffs";
     ESP_ERROR_CHECK(mount_web_storage(web_path));
-    
+
     /* Start the file server */
     ESP_ERROR_CHECK(example_start_file_server(base_path, web_path));
     ESP_LOGI(TAG, "File server started");
+
+    display_show_message("Hello Dude");
 }
