@@ -29,6 +29,7 @@
 #include "protocol_examples_utils.h"
 #include "config_db.h"
 #include "wifi_intf.h"
+#include "display.h"
 
 /* Max length a file path can have on storage */
 #ifdef CONFIG_FATFS_MAX_LFN
@@ -364,7 +365,7 @@ static esp_err_t read_from_io_thread(io_thread_param_t* io_param, char** buf, si
 }
 
 /* Handler to download a file kept on the server */
-static esp_err_t get_file_from_storage(httpd_req_t *req, const char* uri_prefix, const char* base_path, bool handle_dir)
+static esp_err_t get_file_from_storage(httpd_req_t *req, const char* uri_prefix, const char* base_path, bool handle_dir, bool display_status)
 {
     char filename[FILE_PATH_MAX+1];
     FILE *fd = NULL;
@@ -426,6 +427,9 @@ static esp_err_t get_file_from_storage(httpd_req_t *req, const char* uri_prefix,
         }
     }
 #endif
+    if (display_status) {
+        update_file_server_status(filename, FILE_OPERATION_DOWNLOAD);
+    }
 
     /* Retrieve the pointer to scratch buffer for temporary storage */
     size_t chunksize;
@@ -480,6 +484,9 @@ free_resources:
             ESP_LOGE(TAG, "Failed to requeue read buffer");
         }
     }
+    if (display_status) {
+        update_file_server_status(NULL, FILE_OPERATION_IDLE);
+    }
 
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "File sending complete");
@@ -499,7 +506,7 @@ static esp_err_t download_get_handler(httpd_req_t *req)
     const char* uri_prefix = "/get";
     const char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
 
-    return get_file_from_storage(req, uri_prefix, base_path, true);
+    return get_file_from_storage(req, uri_prefix, base_path, true, true);
 }
 
 static esp_err_t static_files_get_handler(httpd_req_t *req)
@@ -507,7 +514,7 @@ static esp_err_t static_files_get_handler(httpd_req_t *req)
     const char* uri_prefix = "";
     const char* base_path = ((struct file_server_data *)req->user_ctx)->static_files_path;
 
-    return get_file_from_storage(req, uri_prefix, base_path, false);    
+    return get_file_from_storage(req, uri_prefix, base_path, false, false);
 }
 
 static esp_err_t upload_file(httpd_req_t *req, const char* file_path)
@@ -521,6 +528,7 @@ static esp_err_t upload_file(httpd_req_t *req, const char* file_path)
     }
 
     ESP_LOGI(TAG, "Receiving file : %s...", file_path);
+    update_file_server_status(file_path, FILE_OPERATION_UPLOAD);
 
     /* Retrieve the pointer to scratch buffer for temporary storage */
     char *buf = ((struct file_server_data *)req->user_ctx)->scratch;
@@ -548,6 +556,7 @@ static esp_err_t upload_file(httpd_req_t *req, const char* file_path)
             ESP_LOGE(TAG, "File reception failed!");
             /* Respond with 500 Internal Server Error */
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive file");
+            update_file_server_status(NULL, FILE_OPERATION_IDLE);
             return ESP_FAIL;
         }
 
@@ -561,6 +570,7 @@ static esp_err_t upload_file(httpd_req_t *req, const char* file_path)
             ESP_LOGE(TAG, "File write failed!");
             /* Respond with 500 Internal Server Error */
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to write file to storage");
+            update_file_server_status(NULL, FILE_OPERATION_IDLE);
             return ESP_FAIL;
         }
 
@@ -572,6 +582,7 @@ static esp_err_t upload_file(httpd_req_t *req, const char* file_path)
     /* Close file upon upload completion */
     fclose(fd);
     ESP_LOGI(TAG, "File reception complete");
+    update_file_server_status(NULL, FILE_OPERATION_IDLE);
 
 #ifdef CONFIG_EXAMPLE_HTTPD_CONN_CLOSE_HEADER
     httpd_resp_set_hdr(req, "Connection", "close");

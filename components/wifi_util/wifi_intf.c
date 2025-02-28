@@ -262,12 +262,7 @@ esp_err_t wifi_init(wifi_mode_t mode, const char* ssid, const char* passwd)
     return start_wifi(mode, ssid, passwd);
 }
 
-esp_err_t get_ip_addr(char* buf, int buf_size)
+esp_ip4_addr_t get_ip_addr(void)
 {
-    int required_size = snprintf(buf, buf_size, IPSTR, IP2STR(&ip_addr));
-    if (required_size + 1 > buf_size) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    return ESP_OK;
+    return ip_addr;
 }

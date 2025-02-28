@@ -1,0 +1,172 @@
+*** baseline
+#+begin_src 
+user1@blackbox:~/code/esp32s3_file_server$ time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   326k      0 --:--:--  0:00:15 --:--:--  332k
+
+real	0m15.219s
+user	0m0.094s
+sys	0m0.346s
+user1@blackbox:~/code/esp32s3_file_server$ time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   322k      0 --:--:--  0:00:15 --:--:--  315k
+
+real	0m15.403s
+user	0m0.112s
+sys	0m0.335s
+user1@blackbox:~/code/esp32s3_file_server$ time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   336k      0 --:--:--  0:00:14 --:--:--  335k
+
+real	0m14.742s
+user	0m0.069s
+sys	0m0.349s
+
+#+end_src
+
+*** 8192 * 2
+#+begin_src text
+user1@blackbox:~/code/esp32s3_file_server$ time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   450k      0 --:--:--  0:00:10 --:--:--  449k
+
+real	0m11.010s
+user	0m0.089s
+sys	0m0.322s
+user1@blackbox:~/code/esp32s3_file_server$ time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   461k      0 --:--:--  0:00:10 --:--:--  466k
+
+real	0m10.759s
+user	0m0.090s
+sys	0m0.327s
+user1@blackbox:~/code/esp32s3_file_server$ time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   451k      0 --:--:--  0:00:10 --:--:--  453k  
+#+end_src
+
+*** 8192 * 3
+#+begin_src 
+user1@blackbox:~/code/esp32s3_file_server$ time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   477k      0 --:--:--  0:00:10 --:--:--  486k
+
+real	0m10.402s
+user	0m0.119s
+sys	0m0.293s
+user1@blackbox:~/code/esp32s3_file_server$ time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   464k      0 --:--:--  0:00:10 --:--:--  468k
+
+real	0m10.687s
+user	0m0.073s
+sys	0m0.328s
+user1@blackbox:~/code/esp32s3_file_server$ time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   470k      0 --:--:--  0:00:10 --:--:--  478k
+
+real	0m10.548s
+user	0m0.102s
+sys	0m0.337s
+#+end_src
+
+*** 8192 * 4
+#+begin_src 
+user1@blackbox:~/code/esp32s3_file_server$ for i in one two three; do time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip; done
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   475k      0 --:--:--  0:00:10 --:--:--  482k
+
+real	0m10.442s
+user	0m0.064s
+sys	0m0.348s
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   480k      0 --:--:--  0:00:10 --:--:--  483k
+
+real	0m10.349s
+user	0m0.121s
+sys	0m0.315s
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   476k      0 --:--:--  0:00:10 --:--:--  480k
+
+real	0m10.435s
+user	0m0.091s
+sys	0m0.330s
+#+end_src
+
+*** 16384 * 2
+#+begin_src 
+user1@blackbox:~/code/esp32s3_file_server$ for i in one two three; do time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip; done
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   486k      0 --:--:--  0:00:10 --:--:--  487k
+
+real	0m10.210s
+user	0m0.102s
+sys	0m0.305s
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   483k      0 --:--:--  0:00:10 --:--:--  484k
+
+real	0m10.288s
+user	0m0.119s
+sys	0m0.301s
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   470k      0 --:--:--  0:00:10 --:--:--  462k
+
+real	0m10.563s
+user	0m0.109s
+sys	0m0.323s
+#+end_src
+
+** 16384 * 3
+#+begin_src 
+user1@blackbox:~/code/esp32s3_file_server$ for i in one two three; do time curl -o test.zip -L http://192.168.3.183/get/BeiBanChuanYouRanTi.zip; done
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   471k      0 --:--:--  0:00:10 --:--:--  474k
+
+real	0m10.524s
+user	0m0.088s
+sys	0m0.306s
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   456k      0 --:--:--  0:00:10 --:--:--  460k
+
+real	0m10.893s
+user	0m0.102s
+sys	0m0.325s
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 4957k    0 4957k    0     0   446k      0 --:--:--  0:00:11 --:--:--  427k
+
+real	0m11.145s
+user	0m0.090s
+sys	0m0.318s
+
+#+end_src
+
+
+*** Summary
+
+| test case   | 1      | 2      | 3      | average |
+|-------------+--------+--------+--------+---------|
+| synchronous | 326K/S | 322K/S | 336K/S | 331K/S  |
+| 8192 * 2    | 450K/S | 461K/S | 451K/S | 454K/S  |
+| *8192 * 3*  | 477K/S | 464K/S | 470K/S | 470K/S  |
+| 8192 * 4    | 475K/S | 480K/S | 476K/S | 477K/S  |
+| 16384 * 2   | 486K/S | 483K/S | 470K/S | 480K/S  |
+| 16384 * 3   | 471K/S | 456K/S | 446K/S | 458K/S  |
+
