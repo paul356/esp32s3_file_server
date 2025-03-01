@@ -100,9 +100,10 @@ static void io_thread_task_func(void* param)
         }
 
         // special signal
-        if (req_item.fp == NULL) {
+        if (req_item.req_buf == NULL) {
             TaskHandle_t task = io_param->task_handle;
             free_io_thread_param(io_param);
+            fclose(req_item.fp);
             vTaskDelete(task);
             break;
         }
@@ -157,7 +158,7 @@ static esp_err_t create_async_io_thread(io_thread_param_t** param) {
     io_param->resp_que = resp_que;
     io_param->task_handle = NULL;
 
-    int res = xTaskCreate(io_thread_task_func, "http_io_thread", 4096, io_param, 10, &io_param->task_handle);
+    int res = xTaskCreate(io_thread_task_func, "http_io_thread", 4096, io_param, tskIDLE_PRIORITY+5, &io_param->task_handle);
     if (res != pdPASS) {
         ESP_LOGE(TAG, "Failed to create task for http io thread.");
         free_io_thread_param(io_param);
@@ -274,6 +275,13 @@ static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filena
     /* This is a limited set only */
     /* For any other type always set as plain text */
     return httpd_resp_set_type(req, "text/plain");
+}
+
+static esp_err_t set_content_length(httpd_req_t *req, size_t len)
+{
+    static char content_len_str[16];
+    sprintf(content_len_str, "%d", len);
+    return httpd_resp_set_hdr(req, "Content-Length", content_len_str);
 }
 
 static esp_err_t get_storage_file_name(char* dest, size_t dest_size, const char *base_path, const char *encoded_name)
@@ -416,7 +424,14 @@ static esp_err_t get_file_from_storage(httpd_req_t *req, const char* uri_prefix,
 
     ESP_LOGI(TAG, "Sending file : %s (%ld bytes)...", filename, file_stat.st_size);
     set_content_type_from_file(req, filename);
+    ret = set_content_length(req, file_stat.st_size);
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to set content length");
+        fclose(fd);
+        return ESP_FAIL;
+    }
 
+    // from now no we should use goto free_resources to free resources
     io_thread_param_t* io_param = NULL;
 #if USE_ASYNC_READ
     if (file_stat.st_size >= ASYNC_READ_FILE_THRESHOLD) {
@@ -476,13 +491,14 @@ static esp_err_t get_file_from_storage(httpd_req_t *req, const char* uri_prefix,
     } while (chunksize != 0);
 
 free_resources:
-    /* Close file after sending complete */
-    fclose(fd);
+    // let io_thread close fd otherwise there could be race issue on fd
     if (io_param) {
-        esp_err_t ret2 = send_buf_to_io_thread(io_param, NULL, NULL, 0, true);
+        esp_err_t ret2 = send_buf_to_io_thread(io_param, fd, NULL, 0, true);
         if (ret2 != ESP_OK) {
             ESP_LOGE(TAG, "Failed to requeue read buffer");
         }
+    } else {
+        fclose(fd);
     }
     if (display_status) {
         update_file_server_status(NULL, FILE_OPERATION_IDLE);

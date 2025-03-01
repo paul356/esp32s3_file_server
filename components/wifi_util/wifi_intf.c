@@ -26,6 +26,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "wifi_intf.h"
+#include "display.h"
 
 #define EXAMPLE_ESP_WIFI_CHANNEL   1
 #define EXAMPLE_MAX_STA_CONN       2
@@ -70,10 +71,12 @@ static void wifi_event_handler(void* arg,
         wifi_event_sta_disconnected_t* event = (wifi_event_sta_disconnected_t*)event_data;
         ESP_LOGI(TAG, "station is disconnected from %s", event->ssid);
         ip_addr.addr = 0;
+        update_service_uri(ip_addr);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "station get ip:" IPSTR, IP2STR(&event->ip_info.ip));
         ip_addr = event->ip_info.ip;
+        update_service_uri(ip_addr);
     }
 
 
@@ -121,6 +124,7 @@ static esp_err_t start_softap(const char* ssid, const char* passwd)
              ssid, EXAMPLE_ESP_WIFI_CHANNEL);
     // hard coded 192.168.4.1
     ip_addr.addr = 0x0104a8c0;
+    update_service_uri(ip_addr);
 
     return ESP_OK;
 }
@@ -186,6 +190,7 @@ esp_err_t wifi_stop(void)
         wifi_state_bits ^= WIFI_HOTSPOT_ENABLED;
     }
     ip_addr.addr = 0;
+    update_service_uri(ip_addr);
 
     return ESP_OK;
 }

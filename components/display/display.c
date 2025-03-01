@@ -9,7 +9,6 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_timer.h"
-#include "wifi_intf.h"
 
 static const char *TAG = "display";
 
@@ -22,21 +21,42 @@ static const char *TAG = "display";
 #define PIN_NUM_RST 9
 #define PIN_NUM_BCKL 14
 
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define SCREEN_HEIGHT 240
 #define SCREEN_WIDTH 280
 #define SCREEN_OFFSET_X 20
+#define LVGL_MAX_WAIT_MS 3000
 
 #define DRAW_BUFFER_SIZE (SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(lv_color16_t) / 10)
 
 #define FILE_SERVER_IDLE_STR "Waiting for connections"
 
-static void update_service_uri(void);
+typedef enum {
+    SERVER_URI,
+    FILE_SERVER_STATUS,
+} update_part_e;
+
+typedef struct
+{
+    update_part_e update_part;
+    union {
+        struct {
+            const char *file_path;
+            file_operation_e op;
+        };
+        struct {
+            esp_ip4_addr_t new_addr;
+        };
+    };
+} display_update_msg_t;
+
+static lv_obj_t *uri_label;
+static lv_obj_t *server_status_label;
+static QueueHandle_t display_update_que;
 
 static void lvgl_tick_task(void *arg)
 {
     (void)arg;
-    lv_tick_inc(10);
+    lv_tick_inc(20);
 }
 
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, unsigned char *px_map)
@@ -64,17 +84,61 @@ static bool example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, 
     return false;
 }
 
+static const char *fop_to_str(file_operation_e op)
+{
+    switch (op)
+    {
+    case FILE_OPERATION_DOWNLOAD:
+        return "Downloading";
+    case FILE_OPERATION_UPLOAD:
+        return "Uploading";
+    case FILE_OPERATION_DELETE:
+        return "Deleting";
+    default:
+        return "Unknown operation on";
+    }
+}
+
+static void update_uri_label(esp_ip4_addr_t new_addr)
+{
+    lv_label_set_text_fmt(uri_label, "Server Address: http://" IPSTR "/", IP2STR(&new_addr));
+}
+
+static void update_status_label(file_operation_e op, const char* file_path)
+{
+    if (file_path != NULL && op != FILE_OPERATION_IDLE)
+    {
+        lv_label_set_text_fmt(server_status_label, "%s %s", fop_to_str(op), file_path);
+    }
+    else
+    {
+        lv_label_set_text(server_status_label, FILE_SERVER_IDLE_STR);
+    }
+}
+
 static void example_lvgl_port_task(void *arg)
 {
     ESP_LOGI(TAG, "Starting LVGL task");
-    while (1)
-    {
-        // check if ip address is changed
-        update_service_uri();
-
+    display_update_msg_t msg;
+    while (1) {
         lv_timer_handler();
+
+        uint32_t wait_time = LVGL_MAX_WAIT_MS;
         // in case of triggering a task watch dog time out
-        vTaskDelay(pdMS_TO_TICKS(10));
+        while (xQueueReceive(display_update_que, &msg, pdMS_TO_TICKS(wait_time)) == pdTRUE) {
+            switch (msg.update_part) {
+            case SERVER_URI:
+                update_uri_label(msg.new_addr);
+                break;
+            case FILE_SERVER_STATUS:
+                update_status_label(msg.op, msg.file_path);
+                break;
+            default:
+                continue;
+            }
+
+            wait_time = 0;
+        }
     }
 }
 
@@ -158,13 +222,10 @@ static esp_err_t init_lvgl(esp_lcd_panel_io_handle_t io_handle, void *user_data)
 
     esp_timer_handle_t lvgl_tick_timer;
     ESP_ERROR_CHECK(esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, 10 * 1000));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, 20 * 1000));
 
     return ESP_OK;
 }
-
-static lv_obj_t *uri_label;
-static lv_obj_t *server_status_label;
 
 static esp_err_t create_widgets(void)
 {
@@ -183,13 +244,35 @@ static esp_err_t create_widgets(void)
 
     // Create the second label
     server_status_label = lv_label_create(win_content);
-    lv_label_set_long_mode(server_status_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_label_set_long_mode(server_status_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(server_status_label, FILE_SERVER_IDLE_STR);
     lv_obj_set_width(server_status_label, SCREEN_WIDTH);
     lv_obj_set_style_text_align(server_status_label, LV_TEXT_ALIGN_CENTER, 0);
 
     return ESP_OK;
 }
+
+static esp_err_t create_lvgl_task(void)
+{
+    ESP_LOGI(TAG, "Create LVGL task");
+
+    // Create the queue
+    display_update_que = xQueueCreate(5, sizeof(display_update_msg_t));
+    if (display_update_que == NULL) {
+        ESP_LOGE(TAG, "Failed to create queue");
+        return ESP_FAIL;
+    }
+
+    if (xTaskCreate(example_lvgl_port_task, "LVGL", 8192, NULL, tskIDLE_PRIORITY, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create LVGL task");
+        vQueueDelete(display_update_que);
+        display_update_que = NULL;
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
 
 esp_err_t display_init(void)
 {
@@ -203,54 +286,39 @@ esp_err_t display_init(void)
 
     ESP_ERROR_CHECK(create_widgets());
 
-    ESP_LOGI(TAG, "Create LVGL task");
-    xTaskCreate(example_lvgl_port_task, "LVGL", 8192, NULL, 10, NULL);
+    ESP_ERROR_CHECK(create_lvgl_task());
 
     ESP_LOGI(TAG, "Display all initialized successfully");
     return ESP_OK;
 }
 
-static void update_service_uri(void)
+void update_service_uri(esp_ip4_addr_t new_addr)
 {
-    static esp_ip4_addr_t curr_ip_addr = {0};
-
-    esp_ip4_addr_t new_ip_addr = get_ip_addr();
-    if (curr_ip_addr.addr != new_ip_addr.addr)
-    {
-        char scratch[128];
-
-        curr_ip_addr = new_ip_addr;
-        snprintf(scratch, sizeof(scratch), "Server Address: http://" IPSTR "/", IP2STR(&new_ip_addr));
-        lv_label_set_text(uri_label, scratch);
+    if (display_update_que == NULL) {
+        return;
     }
-}
 
-static const char *fop_to_str(file_operation_e op)
-{
-    switch (op)
-    {
-    case FILE_OPERATION_DOWNLOAD:
-        return "Downloading";
-    case FILE_OPERATION_UPLOAD:
-        return "Uploading";
-    case FILE_OPERATION_DELETE:
-        return "Deleting";
-    default:
-        return "Unknown operation on";
+    display_update_msg_t msg = {
+        .update_part = SERVER_URI,
+        .new_addr = new_addr,
+    };
+    if (xQueueSend(display_update_que, &msg, 0) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to queue URI updating msg");
     }
 }
 
 void update_file_server_status(const char *file_path, file_operation_e op)
 {
-    char scratch[128];
-
-    if (op != FILE_OPERATION_IDLE)
-    {
-        snprintf(scratch, sizeof(scratch), "%s file %s", fop_to_str(op), file_path);
-        lv_label_set_text(server_status_label, scratch);
+    if (display_update_que == NULL) {
+        return;
     }
-    else
-    {
-        lv_label_set_text(server_status_label, FILE_SERVER_IDLE_STR);
+
+    display_update_msg_t msg = {
+        .update_part = FILE_SERVER_STATUS,
+        .file_path = file_path,
+        .op = op,
+    };
+    if (xQueueSend(display_update_que, &msg, 0) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to queue server status updating msg");
     }
 }
