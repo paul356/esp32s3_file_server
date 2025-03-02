@@ -274,6 +274,15 @@ static esp_err_t create_lvgl_task(void)
 }
 
 
+esp_err_t turn_off_backlight(void)
+{
+    gpio_config_t bk_gpio_config = {.mode = GPIO_MODE_OUTPUT, .pin_bit_mask = 1ULL << PIN_NUM_BCKL};
+    ESP_ERROR_CHECK(gpio_config(&bk_gpio_config));
+    gpio_set_level(PIN_NUM_BCKL, 0);
+
+    return ESP_OK;
+}
+
 esp_err_t display_init(void)
 {
     ESP_LOGI(TAG, "Initializing display");

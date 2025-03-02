@@ -14,3 +14,6 @@ esp_err_t save_wifi_ssid(const char* ssid);
 
 esp_err_t query_wifi_passwd(char* passwd, size_t len);
 esp_err_t save_wifi_passwd(const char* passwd);
+
+esp_err_t query_display_switch(bool *display_on);
+esp_err_t save_display_switch(bool display_on);
