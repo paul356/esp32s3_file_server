@@ -122,6 +122,17 @@ static void toggle_display_switch()
     }
 }
 
+static void handle_card_detect(void)
+{
+    vTaskDelay(pdMS_TO_TICKS(100));
+    if (gpio_get_level(CONFIG_EXAMPLE_PIN_CDET) == 0 && !is_sdcard_mounted())
+    {
+        ESP_LOGI(TAG, "Card is inserted");
+        ESP_ERROR_CHECK(example_mount_storage(SDCARD_MOUNT_POINT));
+    }
+    // better let it crash
+}
+
 static QueueHandle_t gpio_intr_queue = NULL;
 
 static void gpio_isr_handler(void *arg)
@@ -161,17 +172,6 @@ static void gpio_intr_task(void *arg)
             break;
         }
     }
-}
-
-static void handle_card_detect(void)
-{
-    vTaskDelay(pdMS_TO_TICKS(100));
-    if (gpio_get_level(CONFIG_EXAMPLE_PIN_CDET) == 0 && !is_sdcard_mounted())
-    {
-        ESP_LOGI(TAG, "Card is inserted");
-        ESP_ERROR_CHECK(example_mount_storage(SDCARD_MOUNT_POINT));
-    }
-    // better let it crash
 }
 
 static void setup_gpio_intr(void)
