@@ -61,6 +61,9 @@ menu "HTTP file_serving example menu"
             default 34 if IDF_TARGET_ESP32S3
             default 1  # C3 and others
 
+        config EXAMPLE_PIN_CDET
+            int "Card Detector GPIO number"
+            default -1  # C3 and others
     endmenu
 
     menu "SD card pin configuration (SDMMC)"
@@ -96,6 +99,9 @@ menu "HTTP file_serving example menu"
             default 34 if IDF_TARGET_ESP32S3
             default 6
 
+        config EXAMPLE_PIN_CDET
+            int "Card Detector GPIO number"
+            default -1  # C3 and others
     endmenu
 
     config EXAMPLE_HTTPD_CONN_CLOSE_HEADER

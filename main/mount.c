@@ -28,9 +28,16 @@
 #include "sdmmc_cmd.h"
 #include "file_serving_example_common.h"
 
-static const char *TAG = "example_mount";
+static const char *TAG = "sdcard";
+
+static bool sdcard_mounted = false;
 
 #ifdef CONFIG_EXAMPLE_MOUNT_SD_CARD
+
+bool is_sdcard_mounted(void)
+{
+    return sdcard_mounted;
+}
 
 esp_err_t example_mount_storage(const char* base_path)
 {
@@ -117,6 +124,7 @@ esp_err_t example_mount_storage(const char* base_path)
     }
 
     sdmmc_card_print_info(stdout, card);
+    sdcard_mounted = true;
     return ESP_OK;
 }
 
@@ -154,6 +162,7 @@ esp_err_t example_mount_storage(const char* base_path)
     }
 
     ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
+    sdcard_mounted = true;
     return ESP_OK;
 }
 

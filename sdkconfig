@@ -568,6 +568,7 @@ CONFIG_EXAMPLE_DEFAULT_WIFI_AP_PASSWD="nevertells"
 # end of Default ssid/password for WiFi AP
 
 CONFIG_EXAMPLE_PIN_CLK=7
+CONFIG_EXAMPLE_PIN_CDET=4
 
 #
 # SD card pin configuration (SDMMC)

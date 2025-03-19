@@ -29,6 +29,8 @@
  * Look in file_server.c for the implementation.
  */
 
+#define SDCARD_MOUNT_POINT "/data"
+
 static const char *TAG = "main";
 
 static void setup_wifi(void)
@@ -111,6 +113,7 @@ static void toggle_display_switch()
         return;
     }
 
+    ESP_LOGI(TAG, "%s LVGL display right now.", display_on ? "Turning off" : "Turning on");
     ret = save_display_switch(!display_on);
     if (ret != ESP_OK)
     {
@@ -150,11 +153,25 @@ static void gpio_intr_task(void *arg)
             ESP_LOGI(TAG, "Will reset WiFi to AP mode");
             (void)reset_wifi();
             break;
+        case CONFIG_EXAMPLE_PIN_CDET:
+            handle_card_detect();
+            break;
         default:
             ESP_LOGE(TAG, "Unexpected GPIO %u is triggered", io_num);
             break;
         }
     }
+}
+
+static void handle_card_detect(void)
+{
+    vTaskDelay(pdMS_TO_TICKS(100));
+    if (gpio_get_level(CONFIG_EXAMPLE_PIN_CDET) == 0 && !is_sdcard_mounted())
+    {
+        ESP_LOGI(TAG, "Card is inserted");
+        ESP_ERROR_CHECK(example_mount_storage(SDCARD_MOUNT_POINT));
+    }
+    // better let it crash
 }
 
 static void setup_gpio_intr(void)
@@ -176,7 +193,7 @@ static void setup_gpio_intr(void)
     gpio_config_t io_conf = {
         .intr_type = GPIO_INTR_NEGEDGE,
         .mode = GPIO_MODE_INPUT,
-        .pin_bit_mask = 1 << GPIO_NUM_18 | 1 << GPIO_NUM_8,
+        .pin_bit_mask = 1 << GPIO_NUM_18 | 1 << GPIO_NUM_8 | 1 << CONFIG_EXAMPLE_PIN_CDET,
         .pull_down_en = 0,
         .pull_up_en = 1,
     };
@@ -186,6 +203,7 @@ static void setup_gpio_intr(void)
     gpio_install_isr_service(0);
     gpio_isr_handler_add(GPIO_NUM_18, gpio_isr_handler, (void *)GPIO_NUM_18);
     gpio_isr_handler_add(GPIO_NUM_8, gpio_isr_handler, (void *)GPIO_NUM_8);
+    gpio_isr_handler_add(GPIO_NUM_4, gpio_isr_handler, (void *)CONFIG_EXAMPLE_PIN_CDET);
 }
 
 void app_main(void)
@@ -211,8 +229,10 @@ void app_main(void)
     }
 
     /* Initialize file storage */
-    const char *base_path = "/data";
-    ESP_ERROR_CHECK(example_mount_storage(base_path));
+    const char *base_path = SDCARD_MOUNT_POINT;
+    if (gpio_get_level(CONFIG_EXAMPLE_PIN_CDET) == 0) {
+        ESP_ERROR_CHECK(example_mount_storage(base_path));
+    }
 
     const char *web_path = "/spiffs";
     ESP_ERROR_CHECK(mount_web_storage(web_path));

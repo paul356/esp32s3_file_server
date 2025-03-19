@@ -21,6 +21,8 @@
 extern "C" {
 #endif
 
+bool is_sdcard_mounted(void);
+
 esp_err_t example_mount_storage(const char *base_path);
 
 esp_err_t mount_web_storage(const char *web_path);
