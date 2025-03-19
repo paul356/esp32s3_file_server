@@ -30,6 +30,7 @@
 #include "config_db.h"
 #include "wifi_intf.h"
 #include "display.h"
+#include "mount_sdcard.h"
 
 /* Max length a file path can have on storage */
 #ifdef CONFIG_FATFS_MAX_LFN
@@ -522,7 +523,7 @@ static esp_err_t download_get_handler(httpd_req_t *req)
     const char* uri_prefix = "/get";
     const char* base_path = ((struct file_server_data *)req->user_ctx)->base_path;
 
-    if (!is_sdcard_mount()) {
+    if (!is_sdcard_mounted()) {
         ESP_LOGE(TAG, "sdcard is not mounted");
         /* Respond with 500 Internal Server Error */
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sdcard unmounted");
@@ -637,7 +638,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     char file_name[FILE_PATH_MAX+1];
     struct stat file_stat;
 
-    if (!is_sdcard_mount()) {
+    if (!is_sdcard_mounted()) {
         ESP_LOGE(TAG, "sdcard is not mounted");
         /* Respond with 500 Internal Server Error */
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sdcard unmounted");
@@ -678,7 +679,7 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
     char filename[FILE_PATH_MAX+1];
     struct stat file_stat;
 
-    if (!is_sdcard_mount()) {
+    if (!is_sdcard_mounted()) {
         ESP_LOGE(TAG, "sdcard is not mounted");
         /* Respond with 500 Internal Server Error */
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sdcard unmounted");
